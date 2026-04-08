@@ -33,3 +33,13 @@ jobs:
           git diff --staged --quiet || git commit -m "每日分析 $(TZ=Asia/Taipei date '+%Y-%m-%d')"
           git pull --rebase origin main
           git push
+
+      - name: ntfy 推播通知
+        run: |
+          SUMMARY=$(cat summary.txt 2>/dev/null || echo "分析完成，請查看 observation.md")
+          curl -s \
+            -H "Title: 台股開盤前分析 $(TZ=Asia/Taipei date '+%m/%d')" \
+            -H "Priority: default" \
+            -H "Tags: chart_with_upwards_trend" \
+            -d "$SUMMARY" \
+            https://ntfy.sh/${{ secrets.NTFY_TOPIC }}

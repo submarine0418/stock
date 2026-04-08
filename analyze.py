@@ -242,6 +242,20 @@ def main():
 
     print(f"\n已寫入 {obs_file}")
 
+    # ── 寫入 summary.txt（供 ntfy 推播用）──
+    usd_display = f"USD/TWD {usd_mid}" if usd_mid else "匯率未取得"
+    spread_display = f"期現價差 {spread_str}" if tx_close and taiex_close else "期現價差未取得"
+    summary = (
+        f"📅 {TODAY} 開盤前分析\n"
+        f"💱 {usd_display}\n"
+        f"🏦 外資 {foreign_str} | 投信 {trust_str}\n"
+        f"📊 {spread_display}\n"
+        f"📝 {conclusion}"
+    )
+    with open('summary.txt', 'w', encoding='utf-8') as f:
+        f.write(summary)
+    print(f"已寫入 summary.txt")
+
 
 if __name__ == '__main__':
     main()
