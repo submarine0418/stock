@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
 台股開盤前每日分析腳本
-資料來源：台灣銀行、台灣證交所官方 API
-結論由 Claude API 撰寫
+資料來源：台灣銀行、台灣證交所官方 API（免費，不需要 API key）
+Claude 分析由 Remote Trigger 在 claude.ai 另外執行
 """
-import os
 import requests
 import re
 from datetime import datetime
 import pytz
-import anthropic
 
 TW_TZ = pytz.timezone('Asia/Taipei')
 TODAY = datetime.now(TW_TZ).strftime('%Y-%m-%d')
@@ -139,32 +137,6 @@ def fmt_money(amount):
         return "—"
 
 
-def claude_conclusion(data_summary: str) -> str:
-    """呼叫 Claude API，根據今日數據寫出開盤前結論"""
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
-    if not api_key:
-        return "（未設定 ANTHROPIC_API_KEY，略過 AI 結論）"
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=600,
-            messages=[{"role": "user", "content": f"""你是台股操盤手的開盤前助理。根據以下今日數據，用繁體中文寫出簡短結論（100字以內）。
-
-格式固定：「方向偏OO。[關鍵理由1句]。觀察重點：XXX。條件才進。」
-
-數據：
-{data_summary}
-
-注意：
-- 升值超過0.1元才算明顯
-- 三幣齊升才算外資真流入
-- 外資買超搭配正價差才偏多
-- 不要廢話，直接給結論"""}]
-        )
-        return msg.content[0].text.strip()
-    except Exception as e:
-        return f"AI 結論取得失敗：{e}"
 
 
 def main():
@@ -210,20 +182,13 @@ def main():
     tx_str    = str(tx_close)    if tx_close    else "取得失敗"
     taiex_str = str(taiex_close) if taiex_close else "取得失敗"
 
-    # ── 今日結論（Claude API）──
-    data_summary = f"""
-USD/TWD 今日即期：買 {usd_buy} / 賣 {usd_sell}（需與前日16:00收盤比較）
-CNY/TWD 今日即期：買 {cny_buy} / 賣 {cny_sell}
-KRW/TWD 今日即期：買 {krw_buy} / 賣 {krw_sell}
-台指期日盤收盤：{tx_close}
-加權指數收盤：{taiex_close}
-期現價差：{spread_str if tx_close and taiex_close else '無法計算'}
-外資買超：{foreign_str}
-投信買超：{trust_str}
-自營商買超：{dealer_str}
-三大法人合計：{total_str}
-"""
-    conclusion = claude_conclusion(data_summary)
+    # ── 今日結論（簡易邏輯，Claude 分析請看 claude.ai/code/scheduled）──
+    if foreign and foreign['diff'] > 0 and tx_close and taiex_close and spread > 0:
+        conclusion = f"方向偏多。外資買超 {foreign_str}，期現正價差 {spread_str}。三幣走向與夜盤斜率請手動確認後再進場。"
+    elif foreign and foreign['diff'] < 0:
+        conclusion = f"外資賣超 {foreign_str}，方向偏空。今日謹慎，等方向明確再動作。"
+    else:
+        conclusion = "數據不完整或訊號混雜，請至 claude.ai/code/scheduled 查看 Claude 完整分析。"
 
     # ── 組合報告 ──
     report = f"""
