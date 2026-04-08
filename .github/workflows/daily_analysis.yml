@@ -31,4 +31,5 @@ jobs:
           git config user.email "actions@github.com"
           git add observation.md
           git diff --staged --quiet || git commit -m "每日分析 $(TZ=Asia/Taipei date '+%Y-%m-%d')"
+          git pull --rebase origin main
           git push
