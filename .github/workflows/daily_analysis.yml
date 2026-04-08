@@ -1,0 +1,36 @@
+name: 每日台股開盤前分析
+
+on:
+  schedule:
+    - cron: '30 0 * * 1-5'  # 台灣時間 08:30（UTC 00:30），週一到週五
+  workflow_dispatch:          # 手動觸發用
+
+permissions:
+  contents: write
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安裝套件
+        run: pip install anthropic requests pytz
+
+      - name: 執行分析
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python analyze.py
+
+      - name: Commit 並推送
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add observation.md
+          git diff --staged --quiet || git commit -m "每日分析 $(TZ=Asia/Taipei date '+%Y-%m-%d')"
+          git push
