@@ -20,11 +20,9 @@ jobs:
           python-version: '3.11'
 
       - name: 安裝套件
-        run: pip install anthropic requests pytz
+        run: pip install requests pytz
 
       - name: 執行分析
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python analyze.py
 
       - name: Commit 並推送
