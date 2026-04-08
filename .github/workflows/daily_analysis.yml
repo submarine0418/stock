@@ -23,7 +23,13 @@ jobs:
         run: pip install requests pytz
 
       - name: 執行分析
-        run: python analyze.py
+        run: |
+          echo "=== analyze.py 版本確認 ==="
+          head -5 analyze.py
+          echo "=== 已安裝套件 ==="
+          pip list | grep -E "anthropic|requests|pytz"
+          echo "=== 開始執行 ==="
+          python analyze.py
 
       - name: Commit 並推送
         run: |
@@ -35,6 +41,7 @@ jobs:
           git push
 
       - name: ntfy 推播通知
+        if: ${{ secrets.NTFY_TOPIC != '' }}
         run: |
           SUMMARY=$(cat summary.txt 2>/dev/null || echo "分析完成，請查看 observation.md")
           curl -s \
@@ -42,4 +49,4 @@ jobs:
             -H "Priority: default" \
             -H "Tags: chart_with_upwards_trend" \
             -d "$SUMMARY" \
-            https://ntfy.sh/${{ secrets.NTFY_TOPIC }}
+            https://ntfy.sh/${{ secrets.NTFY_TOPIC }} || echo "ntfy 推播失敗，繼續執行"
