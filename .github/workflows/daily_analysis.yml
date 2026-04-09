@@ -20,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: 安裝套件
-        run: pip install requests pytz
+        run: pip install requests pytz yfinance
 
       - name: 執行分析
         run: |

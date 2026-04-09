@@ -1,51 +1,77 @@
 #!/usr/bin/env python3
 """
 台股開盤前每日分析腳本
-資料來源：台灣銀行、台灣證交所官方 API（免費，不需要 API key）
+資料來源：Yahoo Finance (yfinance) + TWSE 官方 API
 Claude 分析由 Remote Trigger 在 claude.ai 另外執行
 """
 import requests
-import re
-from datetime import datetime
+import yfinance as yf
+from datetime import datetime, timedelta
 import pytz
 
 TW_TZ = pytz.timezone('Asia/Taipei')
-TODAY = datetime.now(TW_TZ).strftime('%Y-%m-%d')
+NOW    = datetime.now(TW_TZ)
+TODAY  = NOW.strftime('%Y-%m-%d')
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 
-# ── 匯率：台灣銀行 ─────────────────────────────────────
+# ── 匯率：Yahoo Finance ────────────────────────────────
 
-def fetch_bot_rate(currency):
-    """台灣銀行即期匯率文字格式"""
+def fetch_fx(ticker):
+    """用 yfinance 取得匯率，回傳 (今日收盤, 前日收盤, 漲跌)"""
     try:
-        url = f"https://rate.bot.com.tw/xrt/fltxt/0/{currency}"
-        r = requests.get(url, timeout=15, headers=HEADERS)
-        r.encoding = 'utf-8'
-        return r.text.strip()
+        data = yf.Ticker(ticker).history(period='5d')
+        if data.empty or len(data) < 2:
+            return None, None, None
+        today_close = round(data['Close'].iloc[-1], 4)
+        prev_close  = round(data['Close'].iloc[-2], 4)
+        change      = round(today_close - prev_close, 4)
+        return today_close, prev_close, change
     except Exception as e:
-        print(f"匯率取得失敗 {currency}: {e}")
+        print(f"Yahoo FX 取得失敗 {ticker}: {e}")
+        return None, None, None
+
+
+def fx_direction(change, threshold=0.1):
+    """判斷升貶方向（USD/TWD 下跌 = 台幣升值）"""
+    if change is None:
+        return "資料未取得"
+    # USD/TWD：數字跌 = 台幣升值
+    if change < -threshold:
+        return f"台幣升值 {abs(change):.3f}（明顯）"
+    elif change > threshold:
+        return f"台幣貶值 {change:.3f}（明顯）"
+    else:
+        return f"平盤（{change:+.3f}）"
+
+
+# ── 加權指數 & 台指期：Yahoo Finance ──────────────────
+
+def fetch_taiex():
+    """TAIEX 加權指數收盤"""
+    try:
+        data = yf.Ticker('^TWII').history(period='5d')
+        if data.empty:
+            return None
+        return round(data['Close'].iloc[-1], 2)
+    except Exception as e:
+        print(f"TAIEX 取得失敗: {e}")
         return None
 
 
-def parse_bot_rate(text):
-    """解析台灣銀行匯率，回傳 (即期買入, 即期賣出, 中間價)"""
-    if not text:
-        return None, None, None
-    for line in text.split('\n'):
-        parts = re.split(r'\s+', line.strip())
-        if len(parts) >= 5:
-            try:
-                buy  = float(parts[3])
-                sell = float(parts[4])
-                mid  = round((buy + sell) / 2, 4)
-                return buy, sell, mid
-            except (ValueError, IndexError):
-                continue
-    return None, None, None
+def fetch_tx_futures():
+    """台指期近月（TXF=F）收盤，Yahoo Finance 支援有限，失敗時回傳 None"""
+    try:
+        data = yf.Ticker('TXF=F').history(period='5d')
+        if data.empty:
+            return None
+        return round(data['Close'].iloc[-1], 2)
+    except Exception as e:
+        print(f"台指期取得失敗: {e}")
+        return None
 
 
-# ── 三大法人：台灣證交所 ───────────────────────────────
+# ── 三大法人：TWSE 官方 API ────────────────────────────
 
 def fetch_institutional():
     try:
@@ -58,7 +84,6 @@ def fetch_institutional():
 
 
 def parse_institutional(data):
-    """回傳 dict：{名稱: {'buy': int, 'sell': int, 'diff': int}}"""
     if not data:
         return {}
     result = {}
@@ -76,83 +101,69 @@ def parse_institutional(data):
     return result
 
 
-# ── 台指期：期交所 ─────────────────────────────────────
-
-def fetch_taifex_close():
-    """期交所 TX 日盤最後成交價（用於計算期現價差）"""
-    try:
-        url = "https://www.taifex.com.tw/cht/3/futDailyMarketReport"
-        r = requests.get(url, timeout=15, headers=HEADERS)
-        r.encoding = 'utf-8'
-        # 找 TX 近月合約的收盤欄位
-        match = re.search(
-            r'臺股期貨.*?TX.*?<td[^>]*>(\d[\d,]+)</td>\s*'
-            r'<td[^>]*>(\d[\d,]+)</td>\s*'
-            r'<td[^>]*>(\d[\d,]+)</td>\s*'
-            r'<td[^>]*>(\d[\d,]+)</td>',
-            r.text, re.DOTALL
-        )
-        if match:
-            close = int(match.group(4).replace(',', ''))
-            return close
-        return None
-    except Exception as e:
-        print(f"期交所資料取得失敗: {e}")
-        return None
-
-
-def fetch_taiex_close():
-    """加權指數收盤（TWSE）"""
-    try:
-        url = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json"
-        r = requests.get(url, timeout=15, headers=HEADERS)
-        data = r.json()
-        for table in data.get('tables', []):
-            title = table.get('title', '')
-            if '加權' in title or '指數' in title:
-                rows = table.get('data', [])
-                if rows:
-                    # 最後一列通常是加權指數
-                    for row in reversed(rows):
-                        try:
-                            close = float(str(row[-2]).replace(',', ''))
-                            return close
-                        except (ValueError, IndexError):
-                            continue
-        return None
-    except Exception as e:
-        print(f"加權指數取得失敗: {e}")
-        return None
-
-
 # ── 格式化工具 ─────────────────────────────────────────
 
 def fmt_money(amount):
-    """元 → 億，帶正負號"""
     try:
-        val = abs(int(amount)) / 1e8
+        val  = abs(int(amount)) / 1e8
         sign = '+' if int(amount) >= 0 else '-'
         return f"{sign}{val:.1f}億"
     except Exception:
         return "—"
 
 
-
+# ── 主程式 ─────────────────────────────────────────────
 
 def main():
     print(f"開始執行每日分析：{TODAY}\n")
 
-    # ── 匯率 ──
-    usd_buy, usd_sell, usd_mid = parse_bot_rate(fetch_bot_rate('USD'))
-    cny_buy, cny_sell, cny_mid = parse_bot_rate(fetch_bot_rate('CNY'))
-    krw_buy, krw_sell, krw_mid = parse_bot_rate(fetch_bot_rate('KRW'))
+    # ── 匯率（Yahoo Finance）──
+    usd_today, usd_prev, usd_chg = fetch_fx('USDTWD=X')
+    cny_today, cny_prev, cny_chg = fetch_fx('CNYTWD=X')
+    krw_today, krw_prev, krw_chg = fetch_fx('KRWTWD=X')
 
-    usd_str = f"買 {usd_buy} / 賣 {usd_sell}（中間 {usd_mid}）" if usd_buy else "取得失敗"
-    cny_str = f"買 {cny_buy} / 賣 {cny_sell}（中間 {cny_mid}）" if cny_buy else "取得失敗"
-    krw_str = f"買 {krw_buy} / 賣 {krw_sell}（中間 {krw_mid}）" if krw_buy else "取得失敗"
+    usd_str    = f"{usd_today}（前日 {usd_prev}）" if usd_today else "取得失敗"
+    cny_str    = f"{cny_today}（前日 {cny_prev}）" if cny_today else "取得失敗"
+    krw_str    = f"{krw_today}（前日 {krw_prev}）" if krw_today else "取得失敗"
+    usd_judge  = fx_direction(usd_chg)
 
-    # ── 三大法人 ──
-    inst = parse_institutional(fetch_institutional())
+    # 三幣走向判斷（USD/TWD 跌 = 升值；CNY/TWD、KRW/TWD 跌 = 相對台幣升）
+    currencies_up = sum([
+        1 if usd_chg is not None and usd_chg < 0 else 0,   # 台幣升
+        1 if cny_chg is not None and cny_chg < 0 else 0,   # 人民幣升（相對台幣）
+        1 if krw_chg is not None and krw_chg < 0 else 0,   # 韓元升（相對台幣）
+    ])
+    if currencies_up == 3:
+        three_currency = "三幣齊升 → 國際資金流入亞洲，偏多"
+    elif currencies_up == 0:
+        three_currency = "三幣齊貶 → 亞洲資金外流，偏空"
+    elif usd_chg is not None and usd_chg < 0 and cny_chg is not None and cny_chg > 0:
+        three_currency = "台幣升但人民幣/韓元貶 → 可能壽險拋匯，不持續"
+    else:
+        three_currency = "走向分歧，需人工判斷"
+
+    # ── 加權指數 & 台指期（Yahoo Finance）──
+    taiex_close = fetch_taiex()
+    tx_close    = fetch_tx_futures()
+
+    if tx_close and taiex_close:
+        spread = tx_close - taiex_close
+        spread_str   = f"{spread:+.0f} 點"
+        spread_judge = (
+            "正價差 > 100，偏多" if spread > 100 else
+            "逆價差 > 100，偏空" if spread < -100 else
+            "價差在 ±100 以內，中性"
+        )
+    else:
+        spread       = None
+        spread_str   = "取得失敗"
+        spread_judge = "—"
+
+    taiex_str = f"{taiex_close:,.2f}" if taiex_close else "取得失敗"
+    tx_str    = f"{tx_close:,.2f}"    if tx_close    else "取得失敗（TXF=F 支援有限）"
+
+    # ── 三大法人（TWSE）──
+    inst    = parse_institutional(fetch_institutional())
     foreign = next((v for k, v in inst.items() if '外資' in k and '陸資' in k and '自行' not in k), None)
     trust   = next((v for k, v in inst.items() if '投信' in k), None)
     dealer  = next((v for k, v in inst.items() if '自營' in k and '自行' in k), None)
@@ -163,55 +174,35 @@ def main():
     dealer_str  = fmt_money(dealer['diff'])  if dealer  else "取得失敗"
     total_str   = fmt_money(total)           if total is not None else "取得失敗"
 
-    # ── 台指期 / 現貨 ──
-    tx_close    = fetch_taifex_close()
-    taiex_close = fetch_taiex_close()
-
-    if tx_close and taiex_close:
-        spread = tx_close - taiex_close
-        spread_str  = f"{spread:+.0f} 點"
-        spread_judge = (
-            "正價差 > 100，偏多" if spread > 100 else
-            "逆價差 > 100，偏空" if spread < -100 else
-            "價差在 ±100 以內，中性"
-        )
-    else:
-        spread_str   = "取得失敗（請手動計算夜盤 - 現貨）"
-        spread_judge = "—"
-
-    tx_str    = str(tx_close)    if tx_close    else "取得失敗"
-    taiex_str = str(taiex_close) if taiex_close else "取得失敗"
-
-    # ── 今日結論（簡易邏輯，Claude 分析請看 claude.ai/code/scheduled）──
-    if foreign and foreign['diff'] > 0 and tx_close and taiex_close and spread > 0:
-        conclusion = f"方向偏多。外資買超 {foreign_str}，期現正價差 {spread_str}。三幣走向與夜盤斜率請手動確認後再進場。"
+    # ── 結論 ──
+    if foreign and foreign['diff'] > 0 and spread is not None and spread > 0:
+        conclusion = f"方向偏多。外資買超 {foreign_str}，期現正價差 {spread_str}。{usd_judge}。"
     elif foreign and foreign['diff'] < 0:
         conclusion = f"外資賣超 {foreign_str}，方向偏空。今日謹慎，等方向明確再動作。"
     else:
-        conclusion = "數據不完整或訊號混雜，請至 claude.ai/code/scheduled 查看 Claude 完整分析。"
+        conclusion = f"訊號混雜，請至 claude.ai/code/scheduled 查看 Claude 完整分析。外資 {foreign_str}。"
 
     # ── 組合報告 ──
     report = f"""
 ## {TODAY}
 
-### 匯率（台灣銀行即期，今日牌告）
-| 幣別 | 今日報價 |
-|------|---------|
-| USD/TWD | {usd_str} |
-| CNY/TWD | {cny_str} |
-| KRW/TWD | {krw_str} |
-| 三幣走向 | 請對照前日16:00收盤判斷（升超0.1元算明顯） |
+### 匯率（Yahoo Finance）
+| 幣別 | 今日 | 前日 | 判斷 |
+|------|------|------|------|
+| USD/TWD | {usd_str} | {usd_judge} |
+| CNY/TWD | {cny_str} | — |
+| KRW/TWD | {krw_str} | — |
+| **三幣走向** | {three_currency} | |
 
-### 台指期（日盤，供參考）
+### 台指期 & 現貨
 | 項目 | 數字 |
 |------|------|
-| TX 日盤收盤 | {tx_str} |
-| 加權指數收盤 | {taiex_str} |
+| 加權指數（TAIEX） | {taiex_str} |
+| 台指期（TXF） | {tx_str} |
 | 期現價差 | {spread_str} |
 | 判斷 | {spread_judge} |
-| 夜盤收盤 | 請手動查（期交所 / Yahoo 期貨）|
 
-### 三大法人整體
+### 三大法人（TWSE）
 | 法人 | 買超金額 |
 |------|----------|
 | 外資 | {foreign_str} |
@@ -239,15 +230,15 @@ def main():
 
     with open(obs_file, 'w', encoding='utf-8') as f:
         f.write(existing.rstrip() + '\n' + report + '\n')
+    print(f"已寫入 {obs_file}")
 
-    print(f"\n已寫入 {obs_file}")
-
-    # ── 寫入 summary.txt（供 ntfy 推播用）──
-    usd_display = f"USD/TWD {usd_mid}" if usd_mid else "匯率未取得"
-    spread_display = f"期現價差 {spread_str}" if tx_close and taiex_close else "期現價差未取得"
+    # ── 寫入 summary.txt（ntfy 推播用）──
+    usd_display    = f"USD/TWD {usd_today}（{usd_judge}）" if usd_today else "匯率未取得"
+    spread_display = f"期現價差 {spread_str}" if spread is not None else "期現價差未取得"
     summary = (
         f"📅 {TODAY} 開盤前分析\n"
         f"💱 {usd_display}\n"
+        f"🌏 {three_currency}\n"
         f"🏦 外資 {foreign_str} | 投信 {trust_str}\n"
         f"📊 {spread_display}\n"
         f"📝 {conclusion}"
