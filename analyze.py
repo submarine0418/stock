@@ -15,21 +15,41 @@ TODAY  = NOW.strftime('%Y-%m-%d')
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 
-# ── 匯率：Yahoo Finance ────────────────────────────────
+# ── 匯率：Yahoo Finance → 台灣銀行備援 ────────────────
 
 def fetch_fx(ticker):
     """用 yfinance 取得匯率，回傳 (今日收盤, 前日收盤, 漲跌)"""
     try:
         data = yf.Ticker(ticker).history(period='5d')
-        if data.empty or len(data) < 2:
-            return None, None, None
-        today_close = round(data['Close'].iloc[-1], 4)
-        prev_close  = round(data['Close'].iloc[-2], 4)
-        change      = round(today_close - prev_close, 4)
-        return today_close, prev_close, change
+        if not data.empty and len(data) >= 2:
+            today_close = round(data['Close'].iloc[-1], 4)
+            prev_close  = round(data['Close'].iloc[-2], 4)
+            change      = round(today_close - prev_close, 4)
+            print(f"{ticker}（yfinance）: {today_close}")
+            return today_close, prev_close, change
     except Exception as e:
-        print(f"Yahoo FX 取得失敗 {ticker}: {e}")
-        return None, None, None
+        print(f"Yahoo FX 失敗 {ticker}: {e}")
+    return None, None, None
+
+
+def fetch_usdtwd_bot():
+    """台灣銀行 USD/TWD 即期匯率備援，回傳 (今日中間價, None, None)"""
+    try:
+        url = "https://rate.bot.com.tw/xrt/fltxt/0/USD"
+        r = requests.get(url, timeout=15, headers=HEADERS)
+        r.encoding = 'utf-8'
+        import re
+        for line in r.text.split('\n'):
+            parts = re.split(r'\s+', line.strip())
+            if len(parts) >= 5:
+                buy  = float(parts[3])
+                sell = float(parts[4])
+                mid  = round((buy + sell) / 2, 4)
+                print(f"USD/TWD（台灣銀行）: {mid}")
+                return mid, None, None
+    except Exception as e:
+        print(f"台灣銀行匯率失敗: {e}")
+    return None, None, None
 
 
 def fx_direction(change, threshold=0.1):
@@ -45,30 +65,49 @@ def fx_direction(change, threshold=0.1):
         return f"平盤（{change:+.3f}）"
 
 
-# ── 加權指數 & 台指期：Yahoo Finance ──────────────────
+# ── 加權指數：Yahoo Finance → TWSE 備援 ───────────────
 
 def fetch_taiex():
-    """TAIEX 加權指數收盤"""
+    """TAIEX 加權指數收盤（yfinance 優先，失敗改用 TWSE API）"""
+    # 方法一：yfinance
     try:
         data = yf.Ticker('^TWII').history(period='5d')
-        if data.empty:
-            return None
-        return round(data['Close'].iloc[-1], 2)
+        if not data.empty:
+            val = round(data['Close'].iloc[-1], 2)
+            print(f"TAIEX（yfinance）: {val}")
+            return val
     except Exception as e:
-        print(f"TAIEX 取得失敗: {e}")
-        return None
+        print(f"TAIEX yfinance 失敗: {e}")
+
+    # 方法二：TWSE 官方 API
+    try:
+        url = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json"
+        r = requests.get(url, timeout=15, headers=HEADERS)
+        data = r.json()
+        for table in data.get('tables', []):
+            for row in table.get('data', []):
+                # 加權指數那列名稱含「加權」
+                if len(row) >= 2 and '加權' in str(row[0]):
+                    val = float(str(row[1]).replace(',', ''))
+                    print(f"TAIEX（TWSE）: {val}")
+                    return val
+    except Exception as e:
+        print(f"TAIEX TWSE 失敗: {e}")
+
+    return None
 
 
 def fetch_tx_futures():
     """台指期近月（TXF=F）收盤，Yahoo Finance 支援有限，失敗時回傳 None"""
     try:
         data = yf.Ticker('TXF=F').history(period='5d')
-        if data.empty:
-            return None
-        return round(data['Close'].iloc[-1], 2)
+        if not data.empty:
+            val = round(data['Close'].iloc[-1], 2)
+            print(f"TX futures（yfinance）: {val}")
+            return val
     except Exception as e:
         print(f"台指期取得失敗: {e}")
-        return None
+    return None
 
 
 # ── 三大法人：TWSE 官方 API ────────────────────────────
@@ -117,8 +156,10 @@ def fmt_money(amount):
 def main():
     print(f"開始執行每日分析：{TODAY}\n")
 
-    # ── 匯率（Yahoo Finance）──
+    # ── 匯率（yfinance → 台灣銀行備援）──
     usd_today, usd_prev, usd_chg = fetch_fx('USDTWD=X')
+    if not usd_today:
+        usd_today, usd_prev, usd_chg = fetch_usdtwd_bot()
     cny_today, cny_prev, cny_chg = fetch_fx('CNYTWD=X')
     krw_today, krw_prev, krw_chg = fetch_fx('KRWTWD=X')
 
