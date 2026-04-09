@@ -4,6 +4,7 @@
 資料來源：Yahoo Finance (yfinance) + TWSE 官方 API
 Claude 分析由 Remote Trigger 在 claude.ai 另外執行
 """
+import json
 import requests
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -143,32 +144,43 @@ def parse_institutional(data):
 # ── 個股法人買超：TWSE T86 ────────────────────────────
 
 def fetch_top_stocks():
-    """三大法人當日買超前15名個股（TWSE T86）"""
+    """三大法人當日買超前15名個股（TWSE T86）
+    欄位：[0]代號 [1]名稱 [4]外資淨買(元) [10]投信淨買(元) [18]三大合計(元)
+    """
     try:
         url = "https://www.twse.com.tw/rwd/zh/fund/T86?selectType=ALL&response=json"
         r = requests.get(url, timeout=15, headers=HEADERS)
-        data = r.json()
+        # 嘗試 UTF-8，失敗改用 Big5
+        try:
+            data = json.loads(r.content.decode('utf-8'))
+        except Exception:
+            data = json.loads(r.content.decode('big5', errors='replace'))
+
         rows = data.get('data', [])
         if not rows:
             return []
-        # 欄位：證券代號, 證券名稱, 外資買, 外資賣, 外資淨買, 投信買, 投信賣, 投信淨買, 自營買, 自營賣, 自營淨買, 三大法人合計
+
+        def to_int(s):
+            try:
+                return int(str(s).replace(',', '').replace('+', '').strip())
+            except ValueError:
+                return 0
+
         results = []
         for row in rows:
-            if len(row) < 12:
+            if len(row) < 19:
                 continue
-            try:
-                code    = row[0].strip()
-                name    = row[1].strip()
-                total   = int(row[11].replace(',', '').replace('+', ''))
-                foreign = int(row[4].replace(',', '').replace('+', ''))
-                trust   = int(row[7].replace(',', '').replace('+', ''))
-                results.append({
-                    'code': code, 'name': name,
-                    'total': total, 'foreign': foreign, 'trust': trust
-                })
-            except (ValueError, IndexError):
+            total = to_int(row[18])
+            if total <= 0:          # 只取買超
                 continue
-        # 依三大法人合計排序，取買超前15
+            results.append({
+                'code':    row[0].strip(),
+                'name':    row[1].strip(),
+                'total':   total,
+                'foreign': to_int(row[4]),
+                'trust':   to_int(row[10]),
+            })
+
         results.sort(key=lambda x: x['total'], reverse=True)
         return results[:15]
     except Exception as e:
