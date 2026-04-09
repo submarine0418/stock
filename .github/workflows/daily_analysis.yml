@@ -41,12 +41,17 @@ jobs:
           git push
 
       - name: ntfy 推播通知
-        if: ${{ secrets.NTFY_TOPIC != '' }}
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
+          if [ -z "$NTFY_TOPIC" ]; then
+            echo "NTFY_TOPIC 未設定，跳過推播"
+            exit 0
+          fi
           SUMMARY=$(cat summary.txt 2>/dev/null || echo "分析完成，請查看 observation.md")
           curl -s \
             -H "Title: 台股開盤前分析 $(TZ=Asia/Taipei date '+%m/%d')" \
             -H "Priority: default" \
             -H "Tags: chart_with_upwards_trend" \
             -d "$SUMMARY" \
-            https://ntfy.sh/${{ secrets.NTFY_TOPIC }} || echo "ntfy 推播失敗，繼續執行"
+            https://ntfy.sh/$NTFY_TOPIC || echo "ntfy 推播失敗，繼續執行"
