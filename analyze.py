@@ -339,6 +339,14 @@ def main():
     # ── 寫入 summary.txt（ntfy 推播用）──
     usd_display    = f"USD/TWD {usd_today}（{usd_judge}）" if usd_today else "匯率未取得"
     spread_display = f"期現價差 {spread_str}" if spread is not None else "期現價差未取得"
+    if top_stocks:
+        top5_lines = '\n'.join(
+            f"  {s['code']} {s['name']} 外資{fmt_money(s['foreign'])} 投信{fmt_money(s['trust'])}"
+            for s in top_stocks[:5]
+        )
+        top5_str = f"\n📈 買超前5名：\n{top5_lines}"
+    else:
+        top5_str = ""
     summary = (
         f"📅 {TODAY} 開盤前分析\n"
         f"💱 {usd_display}\n"
@@ -346,6 +354,7 @@ def main():
         f"🏦 外資 {foreign_str} | 投信 {trust_str}\n"
         f"📊 {spread_display}\n"
         f"📝 {conclusion}"
+        f"{top5_str}"
     )
     with open('summary.txt', 'w', encoding='utf-8') as f:
         f.write(summary)
