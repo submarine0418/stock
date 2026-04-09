@@ -110,7 +110,7 @@ def fetch_tx_futures():
     return None
 
 
-# ── 三大法人：TWSE 官方 API ────────────────────────────
+# ── 三大法人整體：TWSE BFI82U ─────────────────────────
 
 def fetch_institutional():
     try:
@@ -138,6 +138,42 @@ def parse_institutional(data):
             except (ValueError, IndexError):
                 pass
     return result
+
+
+# ── 個股法人買超：TWSE T86 ────────────────────────────
+
+def fetch_top_stocks():
+    """三大法人當日買超前15名個股（TWSE T86）"""
+    try:
+        url = "https://www.twse.com.tw/rwd/zh/fund/T86?selectType=ALL&response=json"
+        r = requests.get(url, timeout=15, headers=HEADERS)
+        data = r.json()
+        rows = data.get('data', [])
+        if not rows:
+            return []
+        # 欄位：證券代號, 證券名稱, 外資買, 外資賣, 外資淨買, 投信買, 投信賣, 投信淨買, 自營買, 自營賣, 自營淨買, 三大法人合計
+        results = []
+        for row in rows:
+            if len(row) < 12:
+                continue
+            try:
+                code    = row[0].strip()
+                name    = row[1].strip()
+                total   = int(row[11].replace(',', '').replace('+', ''))
+                foreign = int(row[4].replace(',', '').replace('+', ''))
+                trust   = int(row[7].replace(',', '').replace('+', ''))
+                results.append({
+                    'code': code, 'name': name,
+                    'total': total, 'foreign': foreign, 'trust': trust
+                })
+            except (ValueError, IndexError):
+                continue
+        # 依三大法人合計排序，取買超前15
+        results.sort(key=lambda x: x['total'], reverse=True)
+        return results[:15]
+    except Exception as e:
+        print(f"T86 個股法人取得失敗: {e}")
+        return []
 
 
 # ── 格式化工具 ─────────────────────────────────────────
@@ -203,7 +239,7 @@ def main():
     taiex_str = f"{taiex_close:,.2f}" if taiex_close else "取得失敗"
     tx_str    = f"{tx_close:,.2f}"    if tx_close    else "取得失敗（TXF=F 支援有限）"
 
-    # ── 三大法人（TWSE）──
+    # ── 三大法人整體（TWSE BFI82U）──
     inst    = parse_institutional(fetch_institutional())
     foreign = next((v for k, v in inst.items() if '外資' in k and '陸資' in k and '自行' not in k), None)
     trust   = next((v for k, v in inst.items() if '投信' in k), None)
@@ -214,6 +250,19 @@ def main():
     trust_str   = fmt_money(trust['diff'])   if trust   else "取得失敗"
     dealer_str  = fmt_money(dealer['diff'])  if dealer  else "取得失敗"
     total_str   = fmt_money(total)           if total is not None else "取得失敗"
+
+    # ── 個股法人買超（TWSE T86）──
+    top_stocks = fetch_top_stocks()
+    if top_stocks:
+        stock_rows = '\n'.join(
+            f"| {s['code']} | {s['name']} | {s['total']:+,} | {s['foreign']:+,} | {s['trust']:+,} |"
+            for s in top_stocks
+        )
+        stock_table = f"""| 代號 | 名稱 | 三大合計(張) | 外資(張) | 投信(張) |
+|------|------|------------|---------|---------|
+{stock_rows}"""
+    else:
+        stock_table = "資料未取得"
 
     # ── 結論 ──
     if foreign and foreign['diff'] > 0 and spread is not None and spread > 0:
@@ -251,8 +300,10 @@ def main():
 | 自營商 | {dealer_str} |
 | **合計** | **{total_str}** |
 
-### 三大法人連續買超個股
-（請手動查 [Goodinfo](https://goodinfo.tw/tw/StockList.asp?MARKET_CAT=%E6%99%BA%E6%85%A7%E9%81%B8%E8%82%A1&INDUSTRY_CAT=%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E8%B2%B7+%E2%80%93+%E6%97%A5%40%40%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E7%BA%8C%E8%B2%B7%E8%B6%85%40%40%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E7%BA%8C%E8%B2%B7%E8%B6%85+%E2%80%93+%E6%97%A5) 或籌碼K線）
+### 三大法人當日買超個股（前15，TWSE T86）
+{stock_table}
+
+> 連續買超需對照前幾日資料，建議搭配 [Goodinfo](https://goodinfo.tw/tw/StockList.asp?MARKET_CAT=%E6%99%BA%E6%85%A7%E9%81%B8%E8%82%A1&INDUSTRY_CAT=%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E8%B2%B7+%E2%80%93+%E6%97%A5%40%40%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E7%BA%8C%E8%B2%B7%E8%B6%85%40%40%E4%B8%89%E5%A4%A7%E6%B3%95%E4%BA%BA%E9%80%A3%E7%BA%8C%E8%B2%B7%E8%B6%85+%E2%80%93+%E6%97%A5) 確認
 
 ### 今日結論
 {conclusion}
