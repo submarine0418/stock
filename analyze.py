@@ -415,8 +415,8 @@ def main():
 ### 台指期 & 現貨
 | 項目 | 數字 |
 |------|------|
-| 加權指數 | {taiex:,.2f if taiex else '取得失敗'} |
-| 台指期 | {tx:,.2f if tx else '取得失敗'} |
+| 加權指數 | {f'{taiex:,.2f}' if taiex else '取得失敗'} |
+| 台指期 | {f'{tx:,.2f}' if tx else '取得失敗'} |
 | 期現價差 | {spread_str} |
 | 判斷 | {spread_judge} |
 
