@@ -35,14 +35,18 @@ def finmind_get(dataset, params, token):
     """呼叫 FinMind API"""
     base = 'https://api.finmindtrade.com/api/v4/data'
     params['dataset'] = dataset
-    params['token'] = token
     qs = urllib.parse.urlencode(params)
     url = f"{base}?{qs}"
     try:
         req = urllib.request.Request(url)
+        req.add_header('Authorization', f'Bearer {token}')
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
-            return data.get('data', [])
+            if data.get('msg') == 'success':
+                return data.get('data', [])
+            else:
+                print(f"  FinMind {dataset}: {data.get('msg', 'unknown error')}")
+                return []
     except Exception as e:
         print(f"  FinMind {dataset} 失敗: {e}")
         return []
