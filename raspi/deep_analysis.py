@@ -332,25 +332,15 @@ def main():
         print(analysis)
         print()
 
-    # 按評分排序，找出值得關注的
+    # 按評分排序
     results.sort(key=lambda x: x[1], reverse=True)
-    top_picks = [r[0] for r in results if r[1] >= 2]
 
-    # 組合推播訊息
+    # 組合推播訊息：全部都列完整分析
     header = f"🔍 深度分析 {datetime.now().strftime('%m/%d')}\n"
-    header += f"分析了 {len(codes)} 檔法人買超個股\n"
+    header += f"分析了 {len(codes)} 檔法人買超個股\n\n"
 
-    if top_picks:
-        header += f"\n⭐ 值得關注（{len(top_picks)} 檔）：\n\n"
-        msg = header + '\n\n'.join(top_picks)
-    else:
-        msg = header + "\n今天沒有特別突出的標的，建議觀望。"
-
-    # 加上其他的簡要列表
-    others = [r[0].split('\n')[0] for r in results if r[1] < 2]
-    if others:
-        msg += "\n\n其他：" + '、'.join(others)
-
+    all_analyses = '\n\n'.join(r[0] for r in results)
+    msg = header + all_analyses
     msg += "\n\n⚠ 以上僅供參考，進場前請確認站上月線"
 
     # Telegram 推送
