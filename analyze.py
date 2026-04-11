@@ -13,10 +13,14 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import pytz
 
+import os
+
 TW_TZ = pytz.timezone('Asia/Taipei')
 NOW = datetime.now(TW_TZ)
 TODAY = NOW.strftime('%Y-%m-%d')
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+FINMIND_TOKEN = os.environ.get('FINMIND_TOKEN', '')
+FINMIND_URL   = 'https://api.finmindtrade.com/api/v4/data'
 
 
 # ── 匯率 ──────────────────────────────────────────────
@@ -101,50 +105,107 @@ def fetch_tx_futures():
     return None
 
 
-# ── 三大法人 ──────────────────────────────────────────
+# ── 三大法人（FinMind）────────────────────────────────
 
 def fetch_institutional():
+    """FinMind TaiwanStockInstitutionalInvestors，fallback 到 TWSE BFI82U"""
+    if FINMIND_TOKEN:
+        try:
+            r = requests.get(FINMIND_URL, params={
+                'dataset':    'TaiwanStockInstitutionalInvestors',
+                'start_date': TODAY,
+                'token':      FINMIND_TOKEN,
+            }, timeout=15)
+            rows = r.json().get('data', [])
+            if rows:
+                result = {}
+                for row in rows:
+                    result[row['name']] = {
+                        'buy':  row.get('buy', 0),
+                        'sell': row.get('sell', 0),
+                        'diff': row.get('buy', 0) - row.get('sell', 0),
+                    }
+                print(f"  三大法人（FinMind）: {list(result.keys())}")
+                return result
+        except Exception as e:
+            print(f"  FinMind 三大法人失敗: {e}")
+
+    # fallback：TWSE BFI82U
     try:
-        url = "https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json"
-        r = requests.get(url, timeout=15, headers=HEADERS)
-        return r.json()
+        r = requests.get(
+            'https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json',
+            timeout=15, headers=HEADERS
+        )
+        data = r.json()
+        result = {}
+        for row in data.get('data', []):
+            if len(row) >= 4:
+                name = row[0].strip()
+                try:
+                    result[name] = {
+                        'buy':  int(row[1].replace(',', '')),
+                        'sell': int(row[2].replace(',', '')),
+                        'diff': int(row[3].replace(',', '')),
+                    }
+                except (ValueError, IndexError):
+                    pass
+        print(f"  三大法人（TWSE fallback）: {list(result.keys())}")
+        return result
     except Exception as e:
-        print(f"  三大法人失敗: {e}")
-        return None
+        print(f"  三大法人 TWSE 失敗: {e}")
+        return {}
 
 
 def parse_institutional(data):
-    if not data:
-        return {}
-    result = {}
-    for row in data.get('data', []):
-        if len(row) >= 4:
-            name = row[0].strip()
-            try:
-                result[name] = {
-                    'buy': int(row[1].replace(',', '')),
-                    'sell': int(row[2].replace(',', '')),
-                    'diff': int(row[3].replace(',', '')),
-                }
-            except (ValueError, IndexError):
-                pass
-    return result
+    return data  # FinMind 版已是 dict，直接用
 
 
-# ── 個股法人買超 ──────────────────────────────────────
+# ── 個股法人買超（FinMind）───────────────────────────
 
 def fetch_top_stocks():
+    """FinMind TaiwanStockInstitutionalInvestorsBuySell，fallback 到 TWSE T86"""
+    if FINMIND_TOKEN:
+        try:
+            r = requests.get(FINMIND_URL, params={
+                'dataset':    'TaiwanStockInstitutionalInvestorsBuySell',
+                'start_date': TODAY,
+                'token':      FINMIND_TOKEN,
+            }, timeout=20)
+            rows = r.json().get('data', [])
+            if rows:
+                # 依股票代號彙總三大法人
+                stocks = {}
+                for row in rows:
+                    sid  = row['stock_id']
+                    name = row.get('stock_name', sid)
+                    net  = row.get('buy', 0) - row.get('sell', 0)
+                    inst = row.get('name', '')
+                    if sid not in stocks:
+                        stocks[sid] = {'code': sid, 'name': name,
+                                       'total': 0, 'foreign': 0, 'trust': 0}
+                    stocks[sid]['total'] += net
+                    if '外資' in inst:
+                        stocks[sid]['foreign'] += net
+                    elif '投信' in inst:
+                        stocks[sid]['trust']   += net
+
+                results = [v for v in stocks.values() if v['total'] > 0]
+                results.sort(key=lambda x: x['total'], reverse=True)
+                print(f"  個股法人（FinMind）: {len(results)} 檔買超")
+                return results[:15]
+        except Exception as e:
+            print(f"  FinMind 個股失敗: {e}")
+
+    # fallback：TWSE T86
     try:
-        url = "https://www.twse.com.tw/rwd/zh/fund/T86?selectType=ALL&response=json"
-        r = requests.get(url, timeout=15, headers=HEADERS)
+        r = requests.get(
+            'https://www.twse.com.tw/rwd/zh/fund/T86?selectType=ALL&response=json',
+            timeout=15, headers=HEADERS
+        )
         try:
             data = json.loads(r.content.decode('utf-8'))
         except Exception:
             data = json.loads(r.content.decode('big5', errors='replace'))
-
-        rows = data.get('data', [])
-        if not rows:
-            return []
 
         def to_int(s):
             try:
@@ -153,23 +214,24 @@ def fetch_top_stocks():
                 return 0
 
         results = []
-        for row in rows:
+        for row in data.get('data', []):
             if len(row) < 19:
                 continue
             total = to_int(row[18])
             if total <= 0:
                 continue
             results.append({
-                'code': row[0].strip(),
-                'name': row[1].strip(),
-                'total': total,
+                'code':    row[0].strip(),
+                'name':    row[1].strip(),
+                'total':   total,
                 'foreign': to_int(row[4]),
-                'trust': to_int(row[10]),
+                'trust':   to_int(row[10]),
             })
         results.sort(key=lambda x: x['total'], reverse=True)
+        print(f"  個股法人（TWSE fallback）: {len(results)} 檔買超")
         return results[:15]
     except Exception as e:
-        print(f"  T86 失敗: {e}")
+        print(f"  T86 fallback 失敗: {e}")
         return []
 
 

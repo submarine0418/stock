@@ -1,0 +1,11 @@
+# 敏感設定檔（不推上 GitHub）
+raspi/config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 暫存
+*.log
+summary.txt

@@ -22,6 +22,8 @@ jobs:
         run: pip install requests pytz yfinance
 
       - name: 執行分析
+        env:
+          FINMIND_TOKEN: ${{ secrets.FINMIND_TOKEN }}
         run: python analyze.py
 
       - name: Commit 並推送
