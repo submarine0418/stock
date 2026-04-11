@@ -108,22 +108,34 @@ def fetch_tx_futures():
 # ── 三大法人（FinMind）────────────────────────────────
 
 def fetch_institutional():
-    """FinMind TaiwanStockInstitutionalInvestors，fallback 到 TWSE BFI82U"""
+    """FinMind TaiwanStockTotalInstitutionalInvestors，fallback 到 TWSE BFI82U"""
     if FINMIND_TOKEN:
         try:
             r = requests.get(FINMIND_URL, params={
-                'dataset':    'TaiwanStockInstitutionalInvestors',
+                'dataset':    'TaiwanStockTotalInstitutionalInvestors',
                 'start_date': TODAY,
                 'token':      FINMIND_TOKEN,
             }, timeout=15)
             rows = r.json().get('data', [])
             if rows:
+                # FinMind 英文名稱 → 統一成中文 key
+                name_map = {
+                    'Foreign_Investor':    '外資及陸資(不含外資自營商)',
+                    'Foreign_Dealer_Self': '外資自營商',
+                    'Investment_Trust':    '投信',
+                    'Dealer_self':         '自營商(自行買賣)',
+                    'Dealer_Hedging':      '自營商(避險)',
+                }
                 result = {}
                 for row in rows:
-                    result[row['name']] = {
-                        'buy':  row.get('buy', 0),
-                        'sell': row.get('sell', 0),
-                        'diff': row.get('buy', 0) - row.get('sell', 0),
+                    en_name = row['name']
+                    zh_name = name_map.get(en_name, en_name)
+                    buy = row.get('buy', 0)
+                    sell = row.get('sell', 0)
+                    result[zh_name] = {
+                        'buy': buy,
+                        'sell': sell,
+                        'diff': buy - sell,
                     }
                 print(f"  三大法人（FinMind）: {list(result.keys())}")
                 return result
@@ -184,9 +196,9 @@ def fetch_top_stocks():
                         stocks[sid] = {'code': sid, 'name': name,
                                        'total': 0, 'foreign': 0, 'trust': 0}
                     stocks[sid]['total'] += net
-                    if '外資' in inst:
+                    if 'Foreign' in inst and 'Dealer' not in inst:
                         stocks[sid]['foreign'] += net
-                    elif '投信' in inst:
+                    elif 'Investment_Trust' in inst:
                         stocks[sid]['trust']   += net
 
                 results = [v for v in stocks.values() if v['total'] > 0]
